@@ -1,0 +1,187 @@
+# PrometheusRule — defines alerting and recording rules.
+# The Prometheus operator watches for these resources
+# and automatically loads them into Prometheus.
+#
+# Interview: "How do you manage alerting rules in Kubernetes?"
+# Answer: PrometheusRule custom resources. The Prometheus operator
+# watches for them cluster-wide and loads them automatically.
+# No need to restart Prometheus or edit its config file.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: url-shortener-rules
+  namespace: monitoring
+  labels:
+    # This label tells the Prometheus operator to load these rules.
+    # Must match the ruleSelector in the Prometheus spec.
+    release: prometheus
+    app: kube-prometheus-stack
+spec:
+  groups:
+  # ── Group 1: Recording Rules ─────────────────────────────────
+  # Recording rules pre-compute expensive queries.
+  # Why? Some PromQL queries are expensive to run in real time.
+  # Recording rules compute them on a schedule and store the result
+  # as a new metric. Dashboard queries hit the pre-computed metric
+  # instead of re-running the expensive query.
+  - name: url-shortener.recording
+    interval: 30s    # compute every 30 seconds
+    rules:
+
+    # Pre-compute request rate by endpoint
+    # Name follows convention: job:metric:aggregation
+    - record: job:http_requests:rate5m
+      expr: |
+        sum(
+          rate(http_requests_total{
+            kubernetes_namespace="url-shortener"
+          }[5m])
+        ) by (endpoint, status_code)
+
+    # Pre-compute error rate percentage
+    - record: job:http_error_rate:rate5m
+      expr: |
+        100 * sum(
+          rate(http_requests_total{
+            kubernetes_namespace="url-shortener",
+            status_code=~"5.."
+          }[5m])
+        ) /
+        sum(
+          rate(http_requests_total{
+            kubernetes_namespace="url-shortener"
+          }[5m])
+        )
+
+    # Pre-compute p99 latency
+    - record: job:http_request_duration_p99:rate5m
+      expr: |
+        histogram_quantile(0.99,
+          sum(
+            rate(http_request_duration_seconds_bucket{
+              kubernetes_namespace="url-shortener"
+            }[5m])
+          ) by (le, endpoint)
+        )
+
+  # ── Group 2: Alerting Rules ───────────────────────────────────
+  # Alerting rules trigger when their expression evaluates to true
+  # for a specified duration (the "for" field).
+  # "for: 2m" means: condition must be true for 2+ minutes
+  # before the alert fires. Prevents flapping on brief spikes.
+  - name: url-shortener.alerts
+    rules:
+
+    # ── Alert: High Error Rate ──────────────────────────────────
+    # Fires when more than 5% of requests are returning 5xx errors
+    - alert: HighErrorRate
+      expr: |
+        (
+          sum(rate(http_requests_total{
+            kubernetes_namespace="url-shortener",
+            status_code=~"5.."
+          }[5m]))
+          /
+          sum(rate(http_requests_total{
+            kubernetes_namespace="url-shortener"
+          }[5m]))
+        ) > 0.05
+      for: 2m    # must be true for 2 minutes before firing
+      labels:
+        severity: critical    # used by Alertmanager for routing
+        team: platform
+        service: url-shortener
+      annotations:
+        # summary: short one-line description (shown in alerts list)
+        summary: "High error rate on url-shortener"
+        # description: detailed explanation (shown in alert detail)
+        # {{ }} is Go template syntax — inserts current values
+        description: >-
+          Error rate is {{ $value | humanizePercentage }}
+          (threshold: 5%).
+          Check logs: kubectl logs -l app=url-shortener -n url-shortener
+        # runbook_url: link to remediation documentation
+        runbook_url: "https://wiki.example.com/runbooks/high-error-rate"
+
+    # ── Alert: High Latency ────────────────────────────────────
+    # Fires when p99 latency exceeds 1 second
+    - alert: HighLatency
+      expr: |
+        histogram_quantile(0.99,
+          sum(
+            rate(http_request_duration_seconds_bucket{
+              kubernetes_namespace="url-shortener"
+            }[5m])
+          ) by (le)
+        ) > 1.0
+      for: 5m
+      labels:
+        severity: warning
+        team: platform
+        service: url-shortener
+      annotations:
+        summary: "High p99 latency on url-shortener"
+        description: >-
+          p99 latency is {{ $value | humanizeDuration }}
+          (threshold: 1s).
+          This may indicate Redis slowness or resource exhaustion.
+
+    # ── Alert: Redis Down ──────────────────────────────────────
+    # Fires when Redis is unreachable from the app
+    - alert: RedisDown
+      expr: |
+        redis_connected{
+          kubernetes_namespace="url-shortener"
+        } == 0
+      for: 1m    # Redis down for more than 1 minute = alert
+      labels:
+        severity: critical
+        team: platform
+        service: url-shortener
+      annotations:
+        summary: "Redis is unreachable from url-shortener"
+        description: >-
+          The url-shortener app cannot connect to Redis.
+          All write operations will fail.
+          Check: kubectl get pods -n url-shortener | grep redis
+
+    # ── Alert: Pod Crash Looping ───────────────────────────────
+    # Fires when a pod is restarting frequently
+    - alert: PodCrashLooping
+      expr: |
+        rate(kube_pod_container_status_restarts_total{
+          namespace="url-shortener"
+        }[15m]) * 60 * 15 > 0
+      for: 5m
+      labels:
+        severity: warning
+        team: platform
+      annotations:
+        summary: "Pod {{ $labels.pod }} is crash looping"
+        description: >-
+          Pod {{ $labels.pod }} in namespace {{ $labels.namespace }}
+          has restarted {{ $value }} times in the last 15 minutes.
+          Check: kubectl describe pod {{ $labels.pod }} -n url-shortener
+
+    # ── Alert: High Memory Usage ───────────────────────────────
+    - alert: HighMemoryUsage
+      expr: |
+        container_memory_working_set_bytes{
+          namespace="url-shortener",
+          container="app"
+        }
+        /
+        container_spec_memory_limit_bytes{
+          namespace="url-shortener",
+          container="app"
+        } > 0.85
+      for: 5m
+      labels:
+        severity: warning
+        team: platform
+      annotations:
+        summary: "High memory usage in url-shortener"
+        description: >-
+          Container {{ $labels.pod }} is using
+          {{ $value | humanizePercentage }} of its memory limit.
+          Risk of OOMKill if memory continues to grow.

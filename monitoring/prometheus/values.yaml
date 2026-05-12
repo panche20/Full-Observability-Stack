@@ -1,0 +1,164 @@
+# ── kube-prometheus-stack Helm Values ─────────────────────────
+# This single chart installs:
+# - Prometheus operator
+# - Prometheus instance
+# - Alertmanager
+# - Grafana
+# - Node exporter (node metrics)
+# - kube-state-metrics (K8s object state metrics)
+# - Default dashboards and alerting rules
+
+# ── Prometheus Configuration ───────────────────────────────────
+prometheus:
+  prometheusSpec:
+    # How long to keep data.
+    # Longer = more disk space needed.
+    # 15 days is good for development.
+    retention: 15d
+
+    # How much disk space for metrics storage.
+    retentionSize: 5GiB
+
+    # How often to scrape targets.
+    # 15s is standard. Lower = more data, more CPU.
+    scrapeInterval: 15s
+
+    # How often to evaluate alerting rules.
+    evaluationInterval: 15s
+
+    # Additional scrape configurations.
+    # This tells Prometheus to scrape pods with
+    # prometheus.io/scrape: "true" annotations.
+    # This is how our app gets scraped automatically.
+    additionalScrapeConfigs:
+    - job_name: 'kubernetes-pods'
+      kubernetes_sd_configs:
+      - role: pod
+        namespaces:
+          names:
+          - url-shortener     # only scrape this namespace
+
+      # Relabeling rules process the discovered targets
+      # and decide what to include/exclude
+      relabel_configs:
+
+      # Only scrape pods with prometheus.io/scrape: "true"
+      - source_labels:
+          - __meta_kubernetes_pod_annotation_prometheus_io_scrape
+        action: keep
+        regex: true
+
+      # Use the path from annotation, default /metrics
+      - source_labels:
+          - __meta_kubernetes_pod_annotation_prometheus_io_path
+        action: replace
+        target_label: __metrics_path__
+        regex: (.+)
+
+      # Use the port from annotation
+      - source_labels:
+          - __address__
+          - __meta_kubernetes_pod_annotation_prometheus_io_port
+        action: replace
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: $1:$2
+        target_label: __address__
+
+      # Add Kubernetes metadata as metric labels
+      # This lets you filter metrics by pod name, namespace, etc.
+      - action: labelmap
+        regex: __meta_kubernetes_pod_label_(.+)
+
+      - source_labels:
+          - __meta_kubernetes_namespace
+        action: replace
+        target_label: kubernetes_namespace
+
+      - source_labels:
+          - __meta_kubernetes_pod_name
+        action: replace
+        target_label: kubernetes_pod_name
+
+# ── Grafana Configuration ──────────────────────────────────────
+grafana:
+  enabled: true
+
+  # Default admin password.
+  # Change this in production! Use a secret.
+  adminPassword: "admin123"
+
+  # Grafana service type — NodePort for easy access
+  service:
+    type: NodePort
+    nodePort: 30030
+
+  # Pre-configure Loki as a datasource.
+  # Grafana starts with Prometheus already configured.
+  # We add Loki here so logs are available immediately.
+  additionalDataSources:
+  - name: Loki
+    type: loki
+    url: http://loki.monitoring.svc.cluster.local:3100
+    access: proxy
+    isDefault: false
+
+  # Grafana settings
+  grafana.ini:
+    auth.anonymous:
+      # Enable anonymous access for the lab (disable in prod!)
+      enabled: true
+      org_role: Viewer
+    server:
+      root_url: "%(protocol)s://%(domain)s:%(http_port)s/"
+
+# ── Alertmanager Configuration ─────────────────────────────────
+alertmanager:
+  enabled: true
+
+  alertmanagerSpec:
+    # Alertmanager service type for external access
+    externalUrl: "http://localhost:9093"
+
+# ── Node Exporter ──────────────────────────────────────────────
+nodeExporter:
+  # Collects CPU, memory, disk, network metrics from each node
+  enabled: true
+
+# ── kube-state-metrics ────────────────────────────────────────
+kubeStateMetrics:
+  # Collects metrics about K8s objects:
+  # pod counts, deployment status, resource limits, etc.
+  enabled: true
+
+# ── Default Alerting Rules ─────────────────────────────────────
+defaultRules:
+  create: true
+  rules:
+    # Enable these standard rule sets
+    alertmanager: true
+    etcd: false          # not relevant for minikube
+    configReloaders: true
+    general: true
+    k8s: true
+    kubeApiserverAvailability: false
+    kubeApiserverBurnrate: false
+    kubeApiserverHistogram: false
+    kubeApiserverSlos: false
+    kubeControllerManager: false
+    kubelet: true
+    kubeProxy: false
+    kubePrometheusGeneral: true
+    kubePrometheusNodeRecording: true
+    kubernetesApps: true
+    kubernetesResources: true
+    kubernetesStorage: true
+    kubernetesSystem: true
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+    kubeStateMetrics: true
+    network: true
+    node: true
+    nodeExporterAlerting: true
+    nodeExporterRecording: true
+    prometheus: true
+    prometheusOperator: true

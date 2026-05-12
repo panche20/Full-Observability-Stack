@@ -1,0 +1,125 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: url-shortener
+  namespace: url-shortener
+  labels:
+    app: url-shortener
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: url-shortener
+  template:
+    metadata:
+      labels:
+        app: url-shortener
+        version: v1
+      annotations:
+        # ── Prometheus Scrape Annotations ─────────────────────
+        # These tell Prometheus WHICH pods to scrape and HOW.
+        # Prometheus uses these to auto-discover scrape targets.
+        #
+        # prometheus.io/scrape: "true"
+        #   → include this pod in scraping
+        # prometheus.io/path: "/metrics"
+        #   → call this path to get metrics
+        # prometheus.io/port: "8000"
+        #   → which port to scrape
+        #
+        # Interview: "How does Prometheus discover what to scrape?"
+        # Answer: Service discovery! In Kubernetes, Prometheus
+        # watches for pods/services with these annotations.
+        # No manual configuration needed per service.
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8000"
+    spec:
+      containers:
+      - name: app
+        image: url-shortener:observable
+        imagePullPolicy: Never    # use local minikube image
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: REDIS_HOST
+          value: "redis"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: LOG_LEVEL
+          value: "info"
+        - name: APP_VERSION
+          value: "1.0.0"
+        # Kubernetes Downward API — inject pod metadata as env vars.
+        # Our app uses these in structured logs so you know
+        # WHICH pod generated each log line.
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: url-shortener
+  namespace: url-shortener
+  labels:
+    app: url-shortener
+spec:
+  selector:
+    app: url-shortener
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000
+  type: ClusterIP
+---
+# NodePort service for external access
+# Lets us test the app from outside the cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: url-shortener-external
+  namespace: url-shortener
+  labels:
+    app: url-shortener
+spec:
+  selector:
+    app: url-shortener
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000
+    nodePort: 30080
+  type: NodePort

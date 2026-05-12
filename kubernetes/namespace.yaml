@@ -1,0 +1,15 @@
+# Namespace isolates our app and monitoring from other workloads
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: url-shortener
+  labels:
+    name: url-shortener
+    monitoring: enabled    # label used by Prometheus discovery
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    name: monitoring

@@ -1,0 +1,14 @@
+# Web framework
+fastapi==0.110.0
+uvicorn==0.29.0
+
+# Data validation
+pydantic==2.6.4
+
+# Redis client
+redis==5.0.3
+
+# Prometheus metrics
+# prometheus-client is the official Python client
+# It implements all metric types: Counter, Gauge, Histogram, Summary
+prometheus-client==0.20.0

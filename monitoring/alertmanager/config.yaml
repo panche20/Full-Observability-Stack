@@ -1,0 +1,135 @@
+# Alertmanager routes alerts to the right receivers.
+# Think of it as a smart notification router.
+#
+# Flow:
+# Prometheus evaluates rules → fires alert
+# → sends to Alertmanager
+# → Alertmanager routes to correct receiver (Slack, email, PagerDuty)
+#
+# Key concepts:
+# Grouping:    combine multiple alerts into one notification
+# Inhibition:  suppress low-priority alerts when high-priority fires
+# Silencing:   mute alerts during maintenance
+# Routing:     send different alerts to different teams
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: alertmanager-prometheus-kube-prometheus-alertmanager
+  namespace: monitoring
+stringData:
+  alertmanager.yaml: |
+    global:
+      # Default time to wait before declaring a resolved alert
+      resolve_timeout: 5m
+
+      # Default Slack webhook (replace with real URL in production)
+      slack_api_url: 'https://hooks.slack.com/services/REPLACE/WITH/REAL'
+
+    # ── Route Tree ────────────────────────────────────────────
+    # The route tree defines how alerts flow to receivers.
+    # Every alert starts at the root route.
+    route:
+      # Group alerts by these labels.
+      # Alerts with the same alertname+namespace = one notification.
+      # Prevents alert storms from flooding Slack.
+      group_by: ['alertname', 'namespace', 'service']
+
+      # Wait 30s before sending first notification.
+      # Allows multiple alerts to be grouped together.
+      group_wait: 30s
+
+      # Wait 5m before sending new notification for same group.
+      # Prevents repeated notifications for sustained issues.
+      group_interval: 5m
+
+      # Resend notification every 4h if alert is still firing.
+      # Reminds on-call that the issue is unresolved.
+      repeat_interval: 4h
+
+      # Default receiver (if no route matches)
+      receiver: 'default'
+
+      # Child routes — more specific routing
+      routes:
+      # Critical alerts → immediate notification
+      - match:
+          severity: critical
+        receiver: slack-critical
+        group_wait: 10s        # less wait for critical
+        repeat_interval: 1h    # remind every hour
+
+      # Warning alerts → regular notification
+      - match:
+          severity: warning
+        receiver: slack-warning
+        repeat_interval: 4h
+
+      # Platform team alerts
+      - match:
+          team: platform
+        receiver: slack-platform
+
+    # ── Receivers ─────────────────────────────────────────────
+    # Receivers define WHERE and HOW to send notifications.
+    receivers:
+    - name: 'default'
+      slack_configs:
+      - channel: '#alerts'
+        send_resolved: true
+        title: '{{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+
+    - name: 'slack-critical'
+      slack_configs:
+      - channel: '#alerts-critical'
+        send_resolved: true
+        # Slack message formatting
+        title: ':rotating_light: CRITICAL: {{ .GroupLabels.alertname }}'
+        title_link: '{{ (index .Alerts 0).GeneratorURL }}'
+        text: |
+          *Severity:* {{ .CommonLabels.severity }}
+          *Service:* {{ .CommonLabels.service }}
+
+          {{ range .Alerts }}
+          *Summary:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Runbook:* {{ .Annotations.runbook_url }}
+          {{ end }}
+        color: 'danger'
+
+    - name: 'slack-warning'
+      slack_configs:
+      - channel: '#alerts'
+        send_resolved: true
+        title: ':warning: WARNING: {{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          {{ .Annotations.description }}
+          {{ end }}
+        color: 'warning'
+
+    - name: 'slack-platform'
+      slack_configs:
+      - channel: '#platform-alerts'
+        send_resolved: true
+        title: '{{ .GroupLabels.alertname }}'
+        text: |
+          {{ range .Alerts }}
+          {{ .Annotations.summary }}
+          {{ end }}
+
+    # ── Inhibit Rules ─────────────────────────────────────────
+    # Suppress child alerts when parent alert is firing.
+    # Example: if a node is down, don't alert on every pod on that node.
+    inhibit_rules:
+    # If critical fires, suppress warning for same alert+namespace
+    - source_match:
+        severity: 'critical'
+      target_match:
+        severity: 'warning'
+      equal: ['alertname', 'namespace']

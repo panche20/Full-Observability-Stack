@@ -1,6 +1,6 @@
 # 📊 Full Observability Stack
 
-> **Complete from scratch.** No dependencies on previous days.
+> **Complete from scratch.** 
 > Build a production-grade observability platform with Prometheus, Grafana, Loki, and Jaeger — monitoring a fully instrumented FastAPI URL Shortener.
 
 ---

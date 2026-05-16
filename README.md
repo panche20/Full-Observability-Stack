@@ -1,4 +1,4 @@
-# 📊 Week 6, Day 38 — Full Observability Stack
+# 📊 Full Observability Stack
 
 > **Complete from scratch.** No dependencies on previous days.
 > Build a production-grade observability platform with Prometheus, Grafana, Loki, and Jaeger — monitoring a fully instrumented FastAPI URL Shortener.
